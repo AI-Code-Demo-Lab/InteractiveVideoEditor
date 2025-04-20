@@ -1,0 +1,63 @@
+{
+  "name": "interactive-video-editor",
+  "version": "1.0.0",
+  "description": "一个基于 Electron + Vue 3 + Pinia 的交互式视频编辑器应用",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"node scripts/electron-dev.js\"",
+    "build": "npm run build:vite && npm run build:electron",
+    "build:vite": "vite build",
+    "build:electron": "node scripts/build.js",
+    "dist": "electron-builder",
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "vue",
+    "pinia",
+    "video",
+    "editor"
+  ],
+  "author": "",
+  "license": "ISC",
+  "build": {
+    "appId": "com.example.interactivevideoeditor",
+    "productName": "交互式视频编辑器",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.video"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Video"
+    }
+  },
+  "dependencies": {
+    "@antv/x6": "^2.18.1",
+    "@electron/remote": "^2.1.2",
+    "electron-is-dev": "^2.0.0",
+    "pinia": "^2.1.7",
+    "vue": "^3.3.4",
+    "vue-router": "^4.2.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "vite": "^5.0.10",
+    "wait-on": "^7.2.0"
+  }
+}
