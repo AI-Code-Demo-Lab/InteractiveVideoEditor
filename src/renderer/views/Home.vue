@@ -297,111 +297,19 @@ export default {
         data.downstreamNodeIds || []
       );
 
-      // 保存当前播放节点和下游节点信息
-      currentPlayingNodeId.value = nodeId;
-      currentDownstreamNodes.value = data.downstreamNodeIds || [];
-
       // 检查是否是视频节点
       if (nodeId.startsWith("video-")) {
-        const videoNodeInfo = videoNodes.value[nodeId]; // 从 Home.vue 的状态获取基本信息
-        if (!videoNodeInfo) {
-          console.error(`无法在 videoNodes 中找到节点信息: ${nodeId}`);
-          alert(`无法播放视频：找不到节点 ${nodeId} 的信息。`);
+        // 获取图实例
+        const graph = flowGraph.value?.getGraph();
+        if (!graph) {
+          console.error("无法获取图实例");
           return;
         }
-        console.log("播放视频节点基本信息:", videoNodeInfo);
-
-        // 异步函数，用于获取或创建有效的 Blob URL
-        const getVideoUrl = async () => {
-          if (videoNodeInfo.filePath && window.electron?.invoke) {
-            try {
-              const exists = await window.electron.invoke(
-                "fsExistsSync",
-                videoNodeInfo.filePath
-              );
-              if (exists) {
-                const fileBuffer = await window.electron.invoke(
-                  "fsReadFileSync",
-                  videoNodeInfo.filePath
-                );
-                if (fileBuffer && fileBuffer.length > 0) {
-                  // 释放可能存在的旧 URL
-                  if (
-                    videoNodeInfo.url &&
-                    videoNodeInfo.url.startsWith("blob:")
-                  ) {
-                    try {
-                      URL.revokeObjectURL(videoNodeInfo.url);
-                    } catch (e) {
-                      /* ignore */
-                    }
-                  }
-                  // 创建新的 Blob URL
-                  const newUrl = URL.createObjectURL(new Blob([fileBuffer]));
-                  console.log("成功获取/创建视频URL:", newUrl);
-                  // 更新 videoNodes 中的 URL (重要!)
-                  videoNodes.value[nodeId].url = newUrl;
-                  return newUrl;
-                } else {
-                  console.error(
-                    "读取文件内容为空或失败: ",
-                    videoNodeInfo.filePath
-                  );
-                  return null;
-                }
-              } else {
-                console.error("文件不存在:", videoNodeInfo.filePath);
-                return null;
-              }
-            } catch (error) {
-              console.error("读取文件或创建 URL 失败:", error);
-              return null;
-            }
-          } else {
-            console.error("没有有效的文件路径或Electron API不可用");
-            return null;
-          }
-        };
-
-        // 调用异步函数获取 URL
-        getVideoUrl().then((validUrl) => {
-          if (validUrl) {
-            // 设置当前视频URL
-            currentVideoUrl.value = validUrl;
-
-            // 设置节点的播放状态
-            if (flowGraph.value) {
-              flowGraph.value.setPlayingNodeState(nodeId, true);
-            }
-
-            // 加载视频并播放
-            if (videoPlayer.value) {
-              // 确保 video 元素的 src 属性已更新
-              nextTick(() => {
-                if (videoPlayer.value.src !== validUrl) {
-                  videoPlayer.value.src = validUrl;
-                }
-                videoPlayer.value.load(); // 在 src 设置后调用 load
-                videoPlayer.value.play().catch((err) => {
-                  console.log("播放失败:", err);
-                  // 提供更详细的错误信息给用户
-                  alert(
-                    `播放视频失败: ${err.message}\nURL: ${validUrl}\n请检查文件是否有效以及控制台输出。`
-                  );
-                });
-              });
-            }
-          } else {
-            // 处理无法获取有效URL的情况
-            alert(
-              `无法播放视频：文件 ${
-                videoNodeInfo.fileName || videoNodeInfo.filePath
-              } 可能已移动、删除或无法读取。`
-            );
-          }
-        });
-      } else if (nodeId === "video") {
-        // 保留对旧示例节点的处理逻辑
+        // 统一调用 playNextVideo 处理播放
+        playNextVideo(nodeId, graph);
+      }
+      // 保留对旧示例节点的处理，如果需要的话
+      else if (nodeId === "video") {
         // 示例视频节点
         if (videoPlayer.value) {
           // 设置节点的播放状态
@@ -510,45 +418,169 @@ export default {
       return videoNodes;
     };
 
-    // 播放下一个视频
-    const playNextVideo = (nodeId, graph) => {
+    // 播放下一个视频（或由选项/双击触发的视频）
+    const playNextVideo = async (nodeId, graph) => {
       if (!nodeId || !graph) return;
+      console.log("准备播放视频节点:", nodeId);
 
-      console.log("播放下一个视频节点:", nodeId);
+      const videoNodeInfo = videoNodes.value[nodeId]; // 从 Home.vue 的状态获取基本信息
+      if (!videoNodeInfo) {
+        console.error(`无法在 videoNodes 中找到节点信息: ${nodeId}`);
+        alert(`无法播放视频：找不到节点 ${nodeId} 的信息。`);
+        return;
+      }
+      console.log("播放视频节点基本信息:", videoNodeInfo);
 
-      // 如果是视频节点
-      if (nodeId.startsWith("video-") && videoNodes.value[nodeId]) {
-        // 更新当前播放节点
-        currentPlayingNodeId.value = nodeId;
-
-        // 设置节点的播放状态
-        if (flowGraph.value) {
-          flowGraph.value.setPlayingNodeState(nodeId, true);
+      // 异步函数，用于获取或创建有效的 Blob URL
+      const getVideoUrl = async () => {
+        if (videoNodeInfo.filePath && window.electron?.invoke) {
+          try {
+            const exists = await window.electron.invoke(
+              "fsExistsSync",
+              videoNodeInfo.filePath
+            );
+            if (exists) {
+              const fileBuffer = await window.electron.invoke(
+                "fsReadFileSync",
+                videoNodeInfo.filePath
+              );
+              if (fileBuffer && fileBuffer.length > 0) {
+                // 释放可能存在的旧 URL
+                if (
+                  videoNodeInfo.url &&
+                  videoNodeInfo.url.startsWith("blob:")
+                ) {
+                  try {
+                    URL.revokeObjectURL(videoNodeInfo.url);
+                  } catch (e) {
+                    /* ignore */
+                  }
+                }
+                // 创建新的 Blob URL
+                const newUrl = URL.createObjectURL(new Blob([fileBuffer]));
+                console.log("成功获取/创建视频URL:", newUrl);
+                // 更新 videoNodes 中的 URL (重要!)
+                videoNodes.value[nodeId].url = newUrl;
+                return newUrl;
+              } else {
+                console.error(
+                  "读取文件内容为空或失败: ",
+                  videoNodeInfo.filePath
+                );
+                return null;
+              }
+            } else {
+              console.error("文件不存在:", videoNodeInfo.filePath);
+              return null;
+            }
+          } catch (error) {
+            console.error("读取文件或创建 URL 失败:", error);
+            return null;
+          }
+        } else {
+          console.warn(
+            "节点没有有效的文件路径或Electron API不可用，尝试使用现有URL"
+          );
+          // 如果没有filePath，尝试使用现有的URL（可能来自拖放或旧逻辑）
+          if (videoNodeInfo.url && videoNodeInfo.url.startsWith("blob:")) {
+            console.log("使用节点现有的Blob URL:", videoNodeInfo.url);
+            return videoNodeInfo.url;
+          } else {
+            console.error("无法获取有效的视频URL");
+            return null;
+          }
         }
+      };
 
-        // 获取下一个节点的下游节点
-        const nextDownstreamNodes = [];
-        const outgoingEdges = graph.getOutgoingEdges(nodeId);
-        if (outgoingEdges && outgoingEdges.length > 0) {
-          outgoingEdges.forEach((edge) => {
-            nextDownstreamNodes.push(edge.getTargetCellId());
-          });
-        }
-        currentDownstreamNodes.value = nextDownstreamNodes;
-        console.log("下一个节点的下游节点:", nextDownstreamNodes);
+      // 调用异步函数获取 URL
+      const validUrl = await getVideoUrl();
 
-        // 设置视频URL并播放
-        currentVideoUrl.value = videoNodes.value[nodeId].url;
+      if (!validUrl) {
+        alert(
+          `无法播放视频：文件 ${
+            videoNodeInfo.fileName || videoNodeInfo.filePath
+          } 可能已移动、删除或无法读取。`
+        );
+        return;
+      }
 
-        // 加载并播放视频
-        if (videoPlayer.value) {
-          videoPlayer.value.load();
-          videoPlayer.value.play().catch((err) => {
-            console.log("自动播放下一个视频失败:", err);
-          });
-        }
+      console.log("获取到有效的URL，准备播放:", validUrl);
+
+      // --- 更新状态和UI ---
+
+      // 1. 更新当前播放节点ID
+      currentPlayingNodeId.value = nodeId;
+      console.log("当前播放节点ID更新为:", nodeId);
+
+      // 2. 设置节点的播放状态 (视觉效果)
+      if (flowGraph.value) {
+        flowGraph.value.setPlayingNodeState(nodeId, true);
+      }
+
+      // 3. 获取并更新下游节点列表
+      const nextDownstreamNodes = [];
+      const outgoingEdges = graph.getOutgoingEdges(nodeId);
+      if (outgoingEdges && outgoingEdges.length > 0) {
+        outgoingEdges.forEach((edge) => {
+          nextDownstreamNodes.push(edge.getTargetCellId());
+        });
+      }
+      currentDownstreamNodes.value = nextDownstreamNodes;
+      console.log("下一个节点的下游节点更新为:", nextDownstreamNodes);
+
+      // 4. 更新视频播放器的URL
+      currentVideoUrl.value = validUrl;
+      console.log("视频播放器URL更新为:", validUrl);
+
+      // --- 加载并播放视频 ---
+      if (videoPlayer.value) {
+        // 确保 video 元素的 src 属性已更新
+        nextTick(() => {
+          if (videoPlayer.value.src !== validUrl) {
+            console.log("设置 video.src:", validUrl);
+            videoPlayer.value.src = validUrl;
+          } else {
+            console.log("video.src 无需更新，已经是:", validUrl);
+          }
+          console.log("调用 video.load()");
+          videoPlayer.value.load(); // 在 src 设置后调用 load
+
+          // 添加 onloadeddata 监听器来确保视频加载完成再播放
+          videoPlayer.value.onloadeddata = () => {
+            console.log("视频数据已加载 (onloadeddata)，尝试播放");
+            videoPlayer.value
+              .play()
+              .then(() => {
+                console.log("视频播放成功启动");
+              })
+              .catch((err) => {
+                console.error("播放失败:", err);
+                alert(
+                  `播放视频失败: ${err.message}\nURL: ${validUrl}\n请检查文件是否有效以及控制台输出。`
+                );
+              });
+            // 清除监听器，避免重复执行
+            videoPlayer.value.onloadeddata = null;
+          };
+
+          // 处理加载错误
+          videoPlayer.value.onerror = (e) => {
+            console.error(
+              "视频加载错误 (onerror):",
+              e,
+              videoPlayer.value.error
+            );
+            alert(
+              `加载视频失败，请检查文件格式或路径是否正确。错误: ${
+                videoPlayer.value.error?.message || "未知错误"
+              }`
+            );
+            // 清除监听器
+            videoPlayer.value.onerror = null;
+          };
+        });
       } else {
-        console.log("节点不是有效的视频节点或不存在");
+        console.error("videoPlayer 引用无效");
       }
     };
 
@@ -610,12 +642,20 @@ export default {
       console.log("文件已打开:", fileInfo);
 
       // --- 重置播放状态和相关数据 ---
-      // 1. 停止当前播放
+      // 1. 停止当前播放并清除源
       if (videoPlayer.value) {
         videoPlayer.value.pause();
-        videoPlayer.value.src = ""; // 清空播放器源
+        // 移除 src 属性而不是设置为空字符串
+        videoPlayer.value.removeAttribute("src");
+        // 清除内部可能残留的 source 元素 (如果存在且动态添加)
+        const sourceElement = videoPlayer.value.querySelector("source");
+        if (sourceElement) {
+          videoPlayer.value.removeChild(sourceElement);
+        }
+        // 显式调用 load() 来应用更改并停止任何加载尝试
+        videoPlayer.value.load();
       }
-      // 2. 清除播放器URL
+      // 2. 清除播放器URL状态
       currentVideoUrl.value = "";
       // 3. 重置播放状态ID
       currentPlayingNodeId.value = null;

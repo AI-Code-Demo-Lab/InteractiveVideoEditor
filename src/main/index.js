@@ -231,6 +231,40 @@ function setupIpcHandlers() {
     performSave(data, true);
   });
 
+  // 处理视频文件选择请求
+  ipcMain.handle("select-video-file", async () => {
+    try {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: "选择视频文件",
+        filters: [
+          {
+            name: "视频文件",
+            extensions: ["mp4", "webm", "ogg", "mov", "avi"],
+          },
+          { name: "所有文件", extensions: ["*"] },
+        ],
+        properties: ["openFile"],
+      });
+
+      if (canceled || filePaths.length === 0) {
+        return { canceled: true };
+      }
+
+      const filePath = filePaths[0];
+      const stats = fs.statSync(filePath);
+
+      return {
+        canceled: false,
+        filePath: filePath,
+        fileName: path.basename(filePath),
+        fileSize: stats.size,
+      };
+    } catch (error) {
+      console.error("选择视频文件出错:", error);
+      return { canceled: true, error: error.message };
+    }
+  });
+
   // --- 添加文件系统操作的IPC处理器 ---
   ipcMain.handle("fsExistsSync", (event, filePath) => {
     try {

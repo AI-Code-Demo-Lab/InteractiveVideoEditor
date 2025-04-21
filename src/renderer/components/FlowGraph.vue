@@ -365,6 +365,115 @@ export default {
       });
     };
 
+    // 处理更换视频节点的视频
+    const handleReplaceVideo = async (node) => {
+      try {
+        // 给节点添加一个临时的加载状态样式
+        const originalStroke = node.attr("body/stroke");
+        node.attr("body/stroke", "#ff9800"); // 橙色表示处理中
+        node.attr("body/strokeDasharray", "3, 3"); // 虚线
+
+        // 调用主进程选择视频文件
+        const result = await window.electron?.invoke("select-video-file");
+
+        // 先恢复原来的样式
+        node.attr("body/stroke", originalStroke);
+        node.attr("body/strokeDasharray", "none");
+
+        if (!result || result.canceled) {
+          console.log("取消选择视频文件");
+          return;
+        }
+
+        console.log("选择了新的视频文件:", result);
+
+        // 再次添加加载状态样式
+        node.attr("body/stroke", "#ff9800");
+        node.attr("body/strokeDasharray", "3, 3");
+
+        // 获取节点当前数据
+        const nodeData = node.getData();
+        const oldVideoUrl = nodeData.url;
+
+        // 读取新的视频文件
+        const fileBuffer = await window.electron.invoke(
+          "fsReadFileSync",
+          result.filePath
+        );
+        if (!fileBuffer || fileBuffer.length === 0) {
+          console.error("无法读取视频文件:", result.filePath);
+          // 恢复原来的样式
+          node.attr("body/stroke", originalStroke);
+          node.attr("body/strokeDasharray", "none");
+          return;
+        }
+
+        // 创建新的Blob URL
+        const newVideoUrl = URL.createObjectURL(new Blob([fileBuffer]));
+
+        // 获取文件大小（MB）
+        const fileSizeMB = (result.fileSize / (1024 * 1024)).toFixed(2);
+
+        // 更新节点标签文本
+        node.attr("label/text", `${result.fileName}\n${fileSizeMB} MB`);
+
+        // 更新节点数据
+        node.setData({
+          ...nodeData,
+          fileInfo: {
+            name: result.fileName,
+            type: "video/mp4", // 假设类型，实际应根据文件扩展名确定
+            size: result.fileSize,
+          },
+          url: newVideoUrl,
+          filePath: result.filePath,
+        });
+
+        // 释放旧的Blob URL
+        if (oldVideoUrl && oldVideoUrl.startsWith("blob:")) {
+          URL.revokeObjectURL(oldVideoUrl);
+        }
+
+        // 恢复节点样式并添加一个成功的效果
+        node.attr("body/stroke", "#4caf50"); // 绿色表示成功
+        node.attr("body/strokeWidth", 3);
+        node.attr("body/strokeDasharray", "none");
+
+        // 通知父组件视频已更换
+        emit(
+          "video-node-created",
+          {
+            nodeId: node.id,
+            videoUrl: newVideoUrl,
+            fileName: result.fileName,
+            fileSize: fileSizeMB,
+            fileType: "video/mp4", // 假设类型
+            filePath: result.filePath,
+          },
+          false // 不自动播放
+        );
+
+        console.log("视频节点更新成功:", node.id);
+
+        // 2秒后恢复原来的样式
+        setTimeout(() => {
+          node.attr("body/stroke", "#4b89dc"); // 恢复默认的蓝色边框
+          node.attr("body/strokeWidth", 2);
+        }, 2000);
+      } catch (error) {
+        console.error("更换视频失败:", error);
+        // 恢复节点样式
+        node.attr("body/stroke", "#f44336"); // 红色表示错误
+        node.attr("body/strokeDasharray", "none");
+
+        // 2秒后恢复默认样式
+        setTimeout(() => {
+          node.attr("body/stroke", "#4b89dc");
+          node.attr("body/strokeWidth", 2);
+        }, 2000);
+      }
+    };
+
     // 创建一个响应式的画布大小
     const canvasSize = ref({
       width: props.width,
@@ -613,6 +722,30 @@ export default {
         applySelectedStyle(node);
       });
 
+      // 监听节点右键菜单事件
+      graph.on("node:contextmenu", ({ node, e }) => {
+        e.preventDefault(); // 阻止默认的右键菜单
+
+        // 获取节点数据
+        const data = node.getData();
+
+        // 如果是视频节点，则提供更换视频的选项
+        if (data && data.type === "video") {
+          console.log("视频节点右键点击:", node.id);
+
+          // 调用更换视频的方法
+          handleReplaceVideo(node);
+        }
+        // 如果是文本节点，则进入编辑模式
+        else if (data && data.type === "text") {
+          console.log("文本节点右键点击:", node.id);
+
+          // 使用对话框编辑模式
+          const currentText = data?.text || node.attr("label/text") || "";
+          openTextEditDialog(node.id, currentText);
+        }
+      });
+
       // 监听双击节点事件
       graph.on("node:dblclick", ({ node }) => {
         // 获取下游节点
@@ -625,17 +758,7 @@ export default {
         });
         console.log("节点双击:", node.id, "下游节点:", downstreamNodeIds);
 
-        // 处理文本节点的双击编辑
-        const data = node.getData();
-        console.log("节点数据:", data);
-
-        if (data && data.type === "text") {
-          console.log("准备编辑文本节点:", node.id);
-
-          // 使用新的对话框编辑模式
-          const currentText = data?.text || node.attr("label/text") || "";
-          openTextEditDialog(node.id, currentText);
-        }
+        // 不再在这里处理文本节点的编辑，已移至右键菜单
       });
 
       // 监听画布点击事件
@@ -677,9 +800,10 @@ export default {
         }
       });
 
-      // 监听连接线双击事件，断开连接
-      graph.on("edge:dblclick", ({ edge }) => {
-        console.log("双击连接线，断开连接:", edge.id);
+      // 监听连接线右键点击事件，断开连接
+      graph.on("edge:contextmenu", ({ edge, e }) => {
+        e.preventDefault(); // 阻止默认的右键菜单
+        console.log("右键点击连接线，断开连接:", edge.id);
 
         // 添加高亮效果，然后删除
         edge.attr("line/stroke", "#FF0000"); // 设置为红色
@@ -1622,31 +1746,6 @@ export default {
       if (graph) {
         // 注册自定义节点和工具
         Graph.registerNodeTool("textEditor", TextEditorTool, true);
-
-        // 监听双击节点事件
-        graph.on("node:dblclick", ({ node }) => {
-          console.log("节点被双击:", node.id);
-          if (node.getData()?.type === "text") {
-            // 为文本节点添加编辑工具
-            node.addTools({
-              name: "textEditor",
-              args: {
-                getText: () => {
-                  return node.getData()?.text || node.attr("label/text") || "";
-                },
-                setText: (text) => {
-                  // 更新节点文本和数据
-                  node.attr("label/text", text);
-                  node.setData({
-                    ...node.getData(),
-                    text: text,
-                  });
-                  console.log("文本已更新:", text);
-                },
-              },
-            });
-          }
-        });
       }
 
       // 初始调整大小

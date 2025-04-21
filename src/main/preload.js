@@ -36,7 +36,9 @@ contextBridge.exposeInMainWorld("electron", {
       "fsExistsSync",
       "fsStatSync",
       "fsReadFileSync",
+      "select-video-file",
     ];
+
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, ...args);
     }
