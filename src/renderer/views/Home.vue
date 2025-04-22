@@ -552,6 +552,11 @@ export default {
               .play()
               .then(() => {
                 console.log("视频播放成功启动");
+                // 播放成功启动后，强制调整窗口大小
+                nextTick(() => {
+                  handleWindowResize();
+                  console.log("视频播放启动后触发窗口调整");
+                });
               })
               .catch((err) => {
                 console.error("播放失败:", err);
@@ -694,6 +699,12 @@ export default {
 
       // 可以在这里更新窗口标题等
       document.title = `交互式视频编辑器 - ${fileInfo.fileName}`;
+
+      // 文件打开后，强制重新计算并应用画布尺寸
+      nextTick(() => {
+        handleWindowResize();
+        console.log("文件打开后触发窗口调整");
+      });
     };
 
     // 处理文件保存事件

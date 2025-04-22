@@ -305,6 +305,17 @@ export default {
           if (data && data.data) {
             importGraph(data.data);
 
+            // 导入成功后，居中显示内容
+            if (graph) {
+              // 使用 nextTick 确保 DOM 更新和节点渲染完成后再居中
+              nextTick(() => {
+                graph.centerContent();
+                // 也可以选择稍微缩放以适应所有内容
+                // graph.zoomToFit({ padding: 20 });
+                console.log("画布已居中显示导入的内容");
+              });
+            }
+
             // 通知父组件文件已打开
             emit("file-opened", {
               filePath: data.filePath,
@@ -474,12 +485,6 @@ export default {
       }
     };
 
-    // 创建一个响应式的画布大小
-    const canvasSize = ref({
-      width: props.width,
-      height: props.height,
-    });
-
     // 应用选中样式的函数
     const applySelectedStyle = (node) => {
       if (!node) return;
@@ -602,8 +607,8 @@ export default {
 
       graph = new Graph({
         container: container.value,
-        width: canvasSize.value.width,
-        height: canvasSize.value.height,
+        width: props.width,
+        height: props.height,
         grid: {
           size: 10,
           visible: true,
@@ -1272,33 +1277,6 @@ export default {
       }
     };
 
-    // 调整图表大小
-    const resizeGraph = () => {
-      if (graph) {
-        graph.resize(canvasSize.value.width, canvasSize.value.height);
-      }
-    };
-
-    // 处理窗口大小变化
-    const handleResize = () => {
-      if (container.value) {
-        // 获取父容器的大小
-        const parentEl = container.value.parentElement;
-        if (parentEl) {
-          // 更新画布大小
-          canvasSize.value = {
-            width: parentEl.clientWidth,
-            height: parentEl.clientHeight,
-          };
-
-          console.log("窗口大小变化，调整画布大小:", canvasSize.value);
-
-          // 调整图表大小
-          resizeGraph();
-        }
-      }
-    };
-
     // 获取图实例
     const getGraph = () => {
       return graph;
@@ -1579,8 +1557,8 @@ export default {
       selectedCells = [];
 
       // 计算起始添加位置 - 屏幕中心偏上位置
-      const centerX = canvasSize.value.width / 2;
-      const centerY = canvasSize.value.height / 3;
+      const centerX = props.width / 2;
+      const centerY = props.height / 3;
 
       // 创建所有视频节点
       const addedNodes = [];
@@ -1707,8 +1685,8 @@ export default {
       console.log("添加选项按钮被点击");
 
       // 计算放置位置 - 屏幕中心
-      const centerX = canvasSize.value.width / 2;
-      const centerY = canvasSize.value.height / 2;
+      const centerX = props.width / 2;
+      const centerY = props.height / 2;
 
       const node = createTextNode({ x: centerX, y: centerY });
 
@@ -1721,21 +1699,22 @@ export default {
     // 监听 props 变化
     watch(
       () => props.width,
-      () => {
-        canvasSize.value.width = props.width;
-        resizeGraph();
+      (newWidth) => {
+        console.log(`FlowGraph props.width watcher triggered: ${newWidth}`);
+        if (graph) {
+          graph.resize(newWidth, props.height); // Use new width and current height prop
+        }
       }
     );
     watch(
       () => props.height,
-      () => {
-        canvasSize.value.height = props.height;
-        resizeGraph();
+      (newHeight) => {
+        console.log(`FlowGraph props.height watcher triggered: ${newHeight}`);
+        if (graph) {
+          graph.resize(props.width, newHeight); // Use current width prop and new height
+        }
       }
     );
-
-    // 监听canvasSize变化
-    watch(() => canvasSize.value, resizeGraph, { deep: true });
 
     // 组件挂载后初始化X6图形
     onMounted(() => {
@@ -1749,12 +1728,8 @@ export default {
       }
 
       // 初始调整大小
-      handleResize();
+      resizeGraph();
 
-      // 添加窗口大小变化监听器
-      window.addEventListener("resize", handleResize);
-
-      // 设置文件操作相关的事件监听
       setupFileOperations();
     });
 
@@ -1763,8 +1738,6 @@ export default {
       if (graph) {
         // 移除键盘事件监听器
         document.removeEventListener("keydown", handleKeyDown);
-        // 移除窗口大小变化监听器
-        window.removeEventListener("resize", handleResize);
 
         // 移除鼠标事件监听器
         document.removeEventListener("mousedown", handleMouseDown);
@@ -1775,6 +1748,17 @@ export default {
         graph.dispose();
       }
     });
+
+    // MODIFIED: Expose the modified resizeGraph method
+    const resizeGraph = () => {
+      if (graph) {
+        // Directly use props for resizing
+        graph.resize(props.width, props.height);
+        console.log(
+          `FlowGraph resizeGraph exposed method called, resizing to: ${props.width} x ${props.height}`
+        );
+      }
+    };
 
     // 暴露方法给父组件
     return {
@@ -1791,7 +1775,7 @@ export default {
       clearGraph,
       exportGraph,
       importGraph,
-      resizeGraph,
+      resizeGraph, // Expose the method that now uses props
       addVideoNode,
       createTextNode,
       handleDragOver,

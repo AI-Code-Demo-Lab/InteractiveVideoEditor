@@ -1,6 +1,6 @@
 {
   "name": "interactive-video-editor",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "一个基于 Electron + Vue 3 + Pinia 的交互式视频编辑器应用",
   "main": "dist/main/index.js",
   "scripts": {
