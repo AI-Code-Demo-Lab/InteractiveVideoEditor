@@ -95,6 +95,16 @@ function createMenu() {
         isMac ? { role: "close" } : { role: "quit" },
       ],
     },
+    {
+      label: "功能",
+      submenu: [
+        {
+          label: "打包",
+          accelerator: "CmdOrCtrl+E",
+          click: () => exportPackage(),
+        },
+      ],
+    },
   ];
 
   const menu = Menu.buildFromTemplate(template);
@@ -204,6 +214,32 @@ async function performSave(data, forceDialog = false) {
   }
 }
 
+// 导出打包功能
+async function exportPackage() {
+  if (!mainWindow) return;
+
+  try {
+    // 选择导出目录
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: "选择导出目录",
+      properties: ["openDirectory", "createDirectory"],
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return; // 用户取消操作
+    }
+
+    const exportDir = filePaths[0];
+    console.log("导出目录：", exportDir);
+
+    // 请求渲染进程提供需要打包的数据
+    mainWindow.webContents.send("request-export-package", { exportDir });
+  } catch (error) {
+    console.error("打包过程出错:", error);
+    dialog.showErrorBox("错误", `打包失败: ${error.message}`);
+  }
+}
+
 // 当 Electron 完成初始化并准备创建浏览器窗口时调用此方法
 app.whenReady().then(() => {
   createWindow();
@@ -255,7 +291,7 @@ function setupIpcHandlers() {
 
       return {
         canceled: false,
-        filePath: filePath,
+        filePath,
         fileName: path.basename(filePath),
         fileSize: stats.size,
       };
@@ -265,30 +301,448 @@ function setupIpcHandlers() {
     }
   });
 
-  // --- 添加文件系统操作的IPC处理器 ---
-  ipcMain.handle("fsExistsSync", (event, filePath) => {
+  // 处理打包导出请求
+  ipcMain.handle("perform-export", async (event, data) => {
     try {
-      return fs.existsSync(filePath);
+      const { exportDir, graphData, videoFiles } = data;
+
+      // 确保导出目录存在
+      if (!fs.existsSync(exportDir)) {
+        fs.mkdirSync(exportDir, { recursive: true });
+      }
+
+      // 创建videos子目录
+      const videosDir = path.join(exportDir, "videos");
+      if (!fs.existsSync(videosDir)) {
+        fs.mkdirSync(videosDir, { recursive: true });
+      }
+
+      // 发送初始进度
+      event.sender.send("export-progress-update", {
+        progress: 10,
+        message: `准备导出 ${videoFiles.length} 个视频文件...`,
+      });
+
+      // 确保进度消息能被处理
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // 复制视频文件
+      const videoMapping = {};
+      const totalFiles = videoFiles.length;
+
+      for (let i = 0; i < videoFiles.length; i++) {
+        const video = videoFiles[i];
+        // 计算当前进度 - 从10%到70%的范围内
+        const currentProgress = Math.floor(10 + (i / totalFiles) * 60);
+
+        // 发送进度更新
+        event.sender.send("export-progress-update", {
+          progress: currentProgress,
+          message: `正在处理视频 ${i + 1}/${totalFiles}: ${video.fileName}`,
+        });
+
+        // 确保进度消息能被处理
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        if (video.filePath && fs.existsSync(video.filePath)) {
+          // 生成一个唯一的文件名
+          const uniqueFileName = `video_${Date.now()}_${Math.floor(
+            Math.random() * 1000
+          )}_${path.basename(video.filePath)}`;
+          const targetPath = path.join(videosDir, uniqueFileName);
+
+          // 使用Promise包装文件复制操作
+          await new Promise((resolve, reject) => {
+            try {
+              fs.copyFileSync(video.filePath, targetPath);
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          });
+
+          // 记录原始ID到新文件路径的映射
+          videoMapping[video.nodeId] = `videos/${uniqueFileName}`;
+
+          // 每完成一个文件就更新一次进度 - 确保最后一个文件完成时进度为70%
+          let fileProgress;
+          if (i === videoFiles.length - 1) {
+            // 最后一个文件的进度应该是70%
+            fileProgress = 70;
+          } else {
+            // 其他文件按比例分配10%-69%的进度
+            fileProgress = Math.floor(10 + ((i + 1) / totalFiles) * 59);
+          }
+
+          // 发送"已复制"消息
+          event.sender.send("export-progress-update", {
+            progress: fileProgress,
+            message: `已复制 ${i + 1}/${totalFiles} 个视频文件`,
+          });
+
+          // 给UI时间更新
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+
+      // 所有视频处理完成后，确保UI有足够的时间更新
+      if (totalFiles > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+
+      // 发送生成HTML进度
+      event.sender.send("export-progress-update", {
+        progress: 80,
+        message: "正在生成HTML页面...",
+      });
+
+      // 给UI时间更新
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // 创建HTML文件，包含播放器和交互逻辑
+      const htmlContent = generatePlayerHTML(graphData, videoMapping);
+      fs.writeFileSync(
+        path.join(exportDir, "index.html"),
+        htmlContent,
+        "utf-8"
+      );
+
+      // 发送90%进度更新，表示HTML已生成
+      event.sender.send("export-progress-update", {
+        progress: 90,
+        message: "HTML页面已生成，正在完成最后处理...",
+      });
+
+      // 确保这个进度消息能被处理
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // 发送完成进度，设置为100%
+      event.sender.send("export-progress-update", {
+        progress: 100,
+        message: "导出完成！",
+      });
+
+      // 延长等待时间，确保进度更新已经完全被处理
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      return {
+        success: true,
+        message: "打包成功完成！",
+        outputPath: path.join(exportDir, "index.html"),
+      };
     } catch (error) {
-      console.error("fsExistsSync IPC 错误:", error);
+      console.error("执行打包出错:", error);
+      // 发送错误进度
+      event.sender.send("export-progress-update", {
+        progress: 0,
+        message: `导出失败: ${error.message}`,
+      });
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  });
+
+  // 辅助函数：生成播放器HTML
+  function generatePlayerHTML(graphData, videoMapping) {
+    // 创建基础HTML模板
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式视频播放器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            width: 100%;
+            overflow: hidden;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+            max-height: 100vh;
+            background-color: #000;
+            overflow: hidden;
+        }
+        
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        
+        .interactive-options {
+            position: absolute;
+            bottom: 80px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            padding: 0 20px;
+            z-index: 10;
+        }
+        
+        .option {
+            background-color: rgba(75, 137, 220, 0.85);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
+            max-width: 400px;
+            text-align: center;
+        }
+        
+        .option:hover {
+            background-color: rgba(54, 109, 192, 0.95);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="video-container">
+        <video id="videoPlayer" controls controlsList="nofullscreen"></video>
+        <div id="options" class="interactive-options"></div>
+    </div>
+
+    <script>
+    // 图数据
+    const graphData = ${JSON.stringify(graphData, null, 2)};
+    
+    // 视频映射
+    const videoMapping = ${JSON.stringify(videoMapping, null, 2)};
+    
+    // 节点数据映射
+    const nodeMap = {};
+    
+    // 当前播放信息
+    let currentNodeId = null;
+    let currentDownstreamNodes = [];
+    
+    // DOM 元素
+    const videoPlayer = document.getElementById('videoPlayer');
+    const optionsContainer = document.getElementById('options');
+    
+    // 初始化节点映射
+    function initNodeMap() {
+        if (graphData && graphData.cells) {
+            graphData.cells.forEach(cell => {
+                if (cell.shape === 'rect' || cell.shape === 'html') {
+                    nodeMap[cell.id] = {
+                        id: cell.id,
+                        type: cell.data?.type || 'unknown',
+                        data: cell.data || {},
+                        position: { x: cell.position.x, y: cell.position.y },
+                        targets: [] // 下游节点
+                    };
+                }
+            });
+            
+            // 建立节点连接关系
+            graphData.cells.forEach(cell => {
+                if (cell.shape === 'edge' && cell.source && cell.target) {
+                    const sourceId = cell.source.cell;
+                    const targetId = cell.target.cell;
+                    
+                    if (nodeMap[sourceId]) {
+                        nodeMap[sourceId].targets.push(targetId);
+                    }
+                }
+            });
+            
+            console.log('节点映射:', nodeMap);
+        }
+    }
+    
+    // 查找视频入口节点（没有入边的视频节点）
+    function findEntryNode() {
+        // 收集所有作为目标的节点ID
+        const targetIds = new Set();
+        graphData.cells.forEach(cell => {
+            if (cell.shape === 'edge' && cell.target) {
+                targetIds.add(cell.target.cell);
+            }
+        });
+        
+        // 找出没有入边的视频节点
+        for (const nodeId in nodeMap) {
+            const node = nodeMap[nodeId];
+            if (node.type === 'video' && !targetIds.has(nodeId)) {
+                return nodeId;
+            }
+        }
+        
+        // 如果没有找到入口节点，返回第一个视频节点
+        for (const nodeId in nodeMap) {
+            if (nodeMap[nodeId].type === 'video') {
+                return nodeId;
+            }
+        }
+        
+        return null;
+    }
+    
+    // 播放视频
+    function playVideo(nodeId) {
+        if (!nodeMap[nodeId] || nodeMap[nodeId].type !== 'video') {
+            console.error('不是有效的视频节点:', nodeId);
+            return;
+        }
+        
+        // 设置当前节点和下游节点
+        currentNodeId = nodeId;
+        currentDownstreamNodes = nodeMap[nodeId].targets || [];
+        
+        // 获取视频文件路径
+        const videoPath = videoMapping[nodeId];
+        if (!videoPath) {
+            console.error('找不到视频路径:', nodeId);
+            return;
+        }
+        
+        // 设置视频源
+        videoPlayer.src = videoPath;
+        videoPlayer.load();
+        videoPlayer.play().catch(err => {
+            console.error('视频播放失败:', err);
+        });
+        
+        // 清除选项
+        optionsContainer.innerHTML = '';
+    }
+    
+    // 显示选项
+    function showOptions(nodeIds) {
+        // 清空当前选项
+        optionsContainer.innerHTML = '';
+        
+        if (!nodeIds || nodeIds.length === 0) {
+            return;
+        }
+        
+        // 收集文本节点
+        const textNodes = nodeIds.filter(id => nodeMap[id] && nodeMap[id].type === 'text');
+        
+        // 如果有文本节点，显示为选项
+        if (textNodes.length > 0) {
+            textNodes.forEach(nodeId => {
+                const node = nodeMap[nodeId];
+                const option = document.createElement('div');
+                option.className = 'option';
+                option.textContent = node.data.text || '选项';
+                option.addEventListener('click', () => handleOptionClick(nodeId));
+                optionsContainer.appendChild(option);
+            });
+        }
+        // 如果只有视频节点，自动播放第一个
+        else {
+            const videoNodes = nodeIds.filter(id => nodeMap[id] && nodeMap[id].type === 'video');
+            if (videoNodes.length > 0) {
+                // 短暂延迟后播放，给UI时间更新
+                setTimeout(() => {
+                    playVideo(videoNodes[0]);
+                }, 100);
+            }
+        }
+    }
+    
+    // 处理选项点击
+    function handleOptionClick(nodeId) {
+        if (!nodeMap[nodeId]) {
+            console.error('无效的节点ID:', nodeId);
+            return;
+        }
+        
+        // 获取节点的下游节点
+        const targets = nodeMap[nodeId].targets || [];
+        
+        // 如果是文本节点，继续显示选项
+        if (nodeMap[nodeId].type === 'text') {
+            const textTargets = targets.filter(id => nodeMap[id] && nodeMap[id].type === 'text');
+            const videoTargets = targets.filter(id => nodeMap[id] && nodeMap[id].type === 'video');
+            
+            if (textTargets.length > 0) {
+                // 有更多文本节点，显示为选项
+                showOptions(targets);
+            } else if (videoTargets.length > 0) {
+                // 有视频节点，播放第一个
+                playVideo(videoTargets[0]);
+            } else {
+                console.log('此选项没有下游节点');
+            }
+        }
+    }
+    
+    // 处理视频结束事件
+    videoPlayer.addEventListener('ended', () => {
+        if (currentDownstreamNodes.length > 0) {
+            showOptions(currentDownstreamNodes);
+        } else {
+            console.log('视频播放结束，没有后续选项');
+        }
+    });
+    
+    // 初始化并开始播放
+    document.addEventListener('DOMContentLoaded', () => {
+        // 初始化节点映射
+        initNodeMap();
+        
+        // 查找入口节点
+        const entryNodeId = findEntryNode();
+        if (entryNodeId) {
+            playVideo(entryNodeId);
+        } else {
+            console.error('找不到有效的入口视频节点');
+            document.body.innerHTML = '<h1 style="color: white; text-align: center;">错误：找不到有效的视频节点</h1>';
+        }
+    });
+    </script>
+</body>
+</html>`;
+  }
+
+  // 其他处理器...
+
+  // 文件系统辅助函数
+  ipcMain.handle("fsExistsSync", (event, path) => {
+    try {
+      return fs.existsSync(path);
+    } catch (error) {
+      console.error("检查文件存在出错:", error);
       return false;
     }
   });
 
-  ipcMain.handle("fsStatSync", (event, filePath) => {
+  ipcMain.handle("fsStatSync", (event, path) => {
     try {
-      const stats = fs.statSync(filePath);
-      // 只返回可序列化的基本信息
+      const stats = fs.statSync(path);
       return {
         size: stats.size,
         isFile: stats.isFile(),
         isDirectory: stats.isDirectory(),
-        mtimeMs: stats.mtimeMs,
+        created: stats.birthtime,
+        modified: stats.mtime,
       };
     } catch (error) {
-      console.error("fsStatSync IPC 错误:", error);
-      // 返回一个表示错误或文件不存在的结构
-      return { error: error.code || "UNKNOWN_ERROR", size: 0 };
+      console.error("获取文件状态出错:", error);
+      return { error: error.message };
     }
   });
 
@@ -296,13 +750,10 @@ function setupIpcHandlers() {
     try {
       return fs.readFileSync(filePath);
     } catch (error) {
-      console.error("fsReadFileSync IPC 错误:", error);
-      // 返回一个空 Buffer 或抛出错误，取决于渲染进程的期望
-      // 这里选择返回空Buffer，渲染进程需要检查buffer长度
-      return Buffer.from([]);
+      console.error("读取文件出错:", error);
+      return null;
     }
   });
-  // --- 文件系统操作处理器结束 ---
 }
 
 // 当所有窗口关闭时退出应用程序，除非在 macOS 上。在 macOS 上，应用程序和菜单栏通常保持活动状态

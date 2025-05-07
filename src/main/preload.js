@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("electron", {
       "request-save-data",
       "request-save-as-data",
       "create-new-file",
+      "request-export-package",
+      "export-progress-update",
     ];
     if (validChannels.includes(channel)) {
       // 删除旧的监听器以避免重复
@@ -37,6 +39,7 @@ contextBridge.exposeInMainWorld("electron", {
       "fsStatSync",
       "fsReadFileSync",
       "select-video-file",
+      "perform-export",
     ];
 
     if (validChannels.includes(channel)) {

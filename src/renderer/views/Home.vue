@@ -1,5 +1,18 @@
 <template>
   <div class="resizable-layout">
+    <!-- 导出状态指示器 -->
+    <div v-if="exportStatus.isExporting" class="export-status">
+      <div class="export-status-content">
+        <div class="export-status-message">{{ exportStatus.message }}</div>
+        <div class="export-status-progress">
+          <div
+            class="export-status-bar"
+            :style="{ width: `${exportStatus.progress}%` }"
+          ></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 上部分：视频播放器 -->
     <div class="video-section" :style="{ height: topHeight + 'px' }">
       <div class="video-container">
@@ -98,6 +111,13 @@ export default {
 
     // 节点映射 - 用于快速查找节点类型和内容
     const nodeMap = ref({});
+
+    // 添加导出状态
+    const exportStatus = ref({
+      isExporting: false,
+      message: "",
+      progress: 0,
+    });
 
     // 计算图表尺寸
     const graphWidth = ref(window.innerWidth);
@@ -297,18 +317,48 @@ export default {
         data.downstreamNodeIds || []
       );
 
-      // 检查是否是视频节点
-      if (nodeId.startsWith("video-")) {
-        // 获取图实例
-        const graph = flowGraph.value?.getGraph();
-        if (!graph) {
-          console.error("无法获取图实例");
-          return;
-        }
-        // 统一调用 playNextVideo 处理播放
+      // 获取图实例
+      const graph = flowGraph.value?.getGraph();
+      if (!graph) {
+        console.error("无法获取图实例");
+        return;
+      }
+
+      // 保存当前下游节点信息
+      currentDownstreamNodes.value = data.downstreamNodeIds || [];
+
+      // 获取节点和节点数据
+      const node = graph.getCellById(nodeId);
+      if (!node) {
+        console.error("找不到节点:", nodeId);
+        return;
+      }
+
+      const nodeData = node.getData();
+      if (!nodeData) {
+        console.error("节点没有数据:", nodeId);
+        return;
+      }
+
+      // 根据节点类型处理
+      if (nodeData.type === "text") {
+        // 文本节点 - 使用选项点击处理
+        console.log("双击文本节点，显示选项:", nodeId);
+
+        // 创建选项对象直接传给选项处理函数
+        const option = {
+          nodeId: nodeId,
+          text: nodeData.text || node.attr("label/text") || "未命名选项",
+        };
+
+        // 处理选项点击
+        handleOptionClick(option);
+      } else if (nodeData.type === "video" || nodeId.startsWith("video-")) {
+        // 视频节点 - 播放视频
+        console.log("双击视频节点，开始播放:", nodeId);
         playNextVideo(nodeId, graph);
       }
-      // 保留对旧示例节点的处理，如果需要的话
+      // 保留对示例节点的处理
       else if (nodeId === "video") {
         // 示例视频节点
         if (videoPlayer.value) {
@@ -350,8 +400,9 @@ export default {
         const graph = flowGraph.value.getGraph();
         if (!graph) return;
 
-        // 从所有下游节点中筛选出文本节点
+        // 从所有下游节点中筛选出文本节点和视频节点
         const textOptions = [];
+        const videoNodes = [];
 
         currentDownstreamNodes.value.forEach((nodeId) => {
           const node = graph.getCellById(nodeId);
@@ -359,14 +410,17 @@ export default {
 
           const data = node.getData();
           if (data && data.type === "text") {
-            // 查找此文本节点的下游视频节点
-            const videoNodesAfterText = findVideoNodesAfter(graph, nodeId);
+            // 查找此文本节点后的所有节点，按类型分类
+            const nodesAfterText = findNodesAfter(graph, nodeId);
 
             textOptions.push({
               nodeId: nodeId,
               text: data.text || node.attr("label/text") || "未命名选项",
-              nextVideoNodes: videoNodesAfterText,
+              nextVideoNodes: nodesAfterText.videoNodes,
+              nextTextNodes: nodesAfterText.textNodes,
             });
+          } else if (data && data.type === "video") {
+            videoNodes.push(nodeId);
           }
         });
 
@@ -378,28 +432,36 @@ export default {
           nextTick(() => {
             interactiveOptions.value = textOptions;
 
-            // 在一些浏览器中，全屏模式下需要强制重新渲染选项
+            // 在全屏模式下可能需要特殊处理
             if (isFullScreen.value) {
               console.log("在全屏模式下显示选项");
-              // 如有必要，可以添加特殊处理代码
+              ensureOptionsVisibleInFullscreen();
             }
           });
 
           return; // 不自动播放下一个视频，等待用户选择
         }
 
-        // 如果没有文本选项，继续原来的逻辑，自动播放第一个下游视频节点
-        const nextNodeId = currentDownstreamNodes.value[0]; // 获取第一个下游节点
-        playNextVideo(nextNodeId, graph);
+        // 如果没有文本选项但有视频节点，自动播放第一个下游视频节点
+        if (videoNodes.length > 0) {
+          const nextNodeId = videoNodes[0]; // 获取第一个视频节点
+          playNextVideo(nextNodeId, graph);
+        } else {
+          console.log("没有下游文本或视频节点，播放结束");
+        }
       } else {
         console.log("没有下游节点，播放结束");
       }
     };
 
-    // 查找文本节点之后的视频节点
-    const findVideoNodesAfter = (graph, textNodeId) => {
-      const videoNodes = [];
-      const outgoingEdges = graph.getOutgoingEdges(textNodeId);
+    // 查找节点后的所有节点，并按类型分类
+    const findNodesAfter = (graph, nodeId) => {
+      const result = {
+        videoNodes: [],
+        textNodes: [],
+      };
+
+      const outgoingEdges = graph.getOutgoingEdges(nodeId);
 
       if (outgoingEdges && outgoingEdges.length > 0) {
         outgoingEdges.forEach((edge) => {
@@ -409,13 +471,20 @@ export default {
           if (targetNode) {
             const data = targetNode.getData();
             if (data && data.type === "video") {
-              videoNodes.push(targetId);
+              result.videoNodes.push(targetId);
+            } else if (data && data.type === "text") {
+              result.textNodes.push(targetId);
             }
           }
         });
       }
 
-      return videoNodes;
+      return result;
+    };
+
+    // 修改查找文本节点之后的视频节点方法，使用通用函数
+    const findVideoNodesAfter = (graph, textNodeId) => {
+      return findNodesAfter(graph, textNodeId).videoNodes;
     };
 
     // 播放下一个视频（或由选项/双击触发的视频）
@@ -593,23 +662,86 @@ export default {
     const handleOptionClick = (option) => {
       console.log("用户选择了选项:", option);
 
-      // 清空互动选项
-      interactiveOptions.value = [];
-
       // 获取图实例
       const graph = flowGraph.value.getGraph();
       if (!graph) return;
 
-      // 如果选项有关联的下一个视频节点，播放它
-      if (option.nextVideoNodes && option.nextVideoNodes.length > 0) {
-        const nextVideoNodeId = option.nextVideoNodes[0];
+      // 查找选中TextNode的所有下游节点
+      const nextNodes = [];
+      const outgoingEdges = graph.getOutgoingEdges(option.nodeId);
 
-        // 延迟一帧执行，确保UI已更新（特别是在全屏模式下）
+      if (outgoingEdges && outgoingEdges.length > 0) {
+        outgoingEdges.forEach((edge) => {
+          const targetId = edge.getTargetCellId();
+          const targetNode = graph.getCellById(targetId);
+
+          if (targetNode) {
+            const data = targetNode.getData();
+            nextNodes.push({
+              nodeId: targetId,
+              type: data?.type || "unknown",
+              data: data,
+            });
+          }
+        });
+      }
+
+      // 分类下游节点
+      const textNodes = nextNodes.filter((node) => node.type === "text");
+      const videoNodes = nextNodes.filter((node) => node.type === "video");
+
+      console.log("下游文本节点:", textNodes, "下游视频节点:", videoNodes);
+
+      // 如果有文本节点，显示为新的选项
+      if (textNodes.length > 0) {
+        // 清空当前互动选项
+        interactiveOptions.value = [];
+
+        // 准备新的选项
+        const newOptions = textNodes.map((node) => {
+          // 对每个文本节点，查找其下游的视频节点
+          const videoNodesAfterText = findNodesAfter(graph, node.nodeId);
+
+          return {
+            nodeId: node.nodeId,
+            text:
+              node.data?.text ||
+              graph.getCellById(node.nodeId).attr("label/text") ||
+              "未命名选项",
+            nextVideoNodes: videoNodesAfterText.videoNodes,
+            nextTextNodes: videoNodesAfterText.textNodes,
+          };
+        });
+
+        // 设置新的互动选项
+        nextTick(() => {
+          interactiveOptions.value = newOptions;
+
+          // 在全屏模式下可能需要特殊处理
+          if (isFullScreen.value) {
+            console.log("在全屏模式下更新选项");
+            ensureOptionsVisibleInFullscreen();
+          }
+        });
+      }
+      // 如果只有视频节点，直接播放第一个视频
+      else if (videoNodes.length > 0) {
+        // 清空互动选项
+        interactiveOptions.value = [];
+
+        // 播放第一个视频节点
+        const nextVideoNodeId = videoNodes[0].nodeId;
+
+        // 延迟一帧执行，确保UI已更新
         nextTick(() => {
           playNextVideo(nextVideoNodeId, graph);
         });
-      } else {
-        console.log("该选项没有关联的下一个视频节点");
+      }
+      // 如果没有下游节点，提示用户
+      else {
+        console.log("该选项没有关联的下游节点");
+        interactiveOptions.value = [];
+        alert("此选项没有关联任何下游节点，请在编辑器中添加连接。");
       }
     };
 
@@ -780,6 +912,128 @@ export default {
         }, 300);
       });
 
+      // 监听打包导出请求
+      window.electron?.receive("request-export-package", async (data) => {
+        console.log("收到打包请求，导出目录:", data.exportDir);
+
+        try {
+          // 更新导出状态
+          exportStatus.value = {
+            isExporting: true,
+            message: "正在准备导出...",
+            progress: 0,
+          };
+
+          // 获取图形数据
+          const graphData = flowGraph.value.exportGraph();
+          if (!graphData) {
+            throw new Error("无法导出图形数据");
+          }
+
+          // 收集所有视频节点信息
+          const videoFilesToExport = [];
+          Object.entries(videoNodes.value).forEach(([nodeId, nodeInfo]) => {
+            if (nodeInfo.filePath) {
+              videoFilesToExport.push({
+                nodeId,
+                filePath: nodeInfo.filePath,
+                fileName: nodeInfo.fileName || "未命名视频",
+              });
+            } else {
+              console.warn(
+                `节点 ${nodeId} 没有有效的文件路径，将无法在导出中包含`
+              );
+            }
+          });
+
+          if (videoFilesToExport.length === 0) {
+            throw new Error("没有找到有效的视频文件");
+          }
+
+          // 更新状态
+          exportStatus.value = {
+            isExporting: true,
+            message: `准备导出 ${videoFilesToExport.length} 个视频文件...`,
+            progress: 10,
+          };
+
+          // 执行导出
+          const result = await window.electron.invoke("perform-export", {
+            exportDir: data.exportDir,
+            graphData,
+            videoFiles: videoFilesToExport,
+          });
+
+          // 处理结果
+          if (result.success) {
+            // 显示成功消息
+            exportStatus.value = {
+              isExporting: false,
+              message: `打包成功! 输出路径: ${result.outputPath}`,
+              progress: 100,
+            };
+
+            // 短暂显示成功消息后清除
+            setTimeout(() => {
+              exportStatus.value = {
+                isExporting: false,
+                message: "",
+                progress: 0,
+              };
+            }, 3000);
+
+            alert(`打包成功！\n输出路径: ${result.outputPath}`);
+          } else {
+            throw new Error(result.error || "导出过程中发生未知错误");
+          }
+        } catch (error) {
+          console.error("导出过程出错:", error);
+
+          exportStatus.value = {
+            isExporting: false,
+            message: `导出失败: ${error.message}`,
+            progress: 0,
+          };
+
+          // 短暂显示错误消息后清除
+          setTimeout(() => {
+            exportStatus.value = {
+              isExporting: false,
+              message: "",
+              progress: 0,
+            };
+          }, 3000);
+
+          alert(`导出失败: ${error.message}`);
+        }
+      });
+
+      // 监听导出进度更新
+      window.electron?.receive("export-progress-update", (data) => {
+        console.log("导出进度更新:", data);
+
+        if (data && exportStatus.value.isExporting) {
+          // 使用nextTick确保UI更新
+          nextTick(() => {
+            exportStatus.value = {
+              isExporting: true,
+              message: data.message || exportStatus.value.message,
+              progress: data.progress || exportStatus.value.progress,
+            };
+
+            // 强制重新渲染DOM
+            setTimeout(() => {
+              const statusBar = document.querySelector(".export-status-bar");
+              if (statusBar) {
+                statusBar.style.width = `${
+                  data.progress || exportStatus.value.progress
+                }%`;
+              }
+            }, 0);
+          });
+        }
+      });
+
       // 返回清理函数，在组件卸载时执行
       return () => {
         clearInterval(maximizeCheckInterval);
@@ -888,6 +1142,7 @@ export default {
       currentDownstreamNodes,
       interactiveOptions,
       isFullScreen,
+      exportStatus,
       startResize,
       handleTimeUpdate,
       handleNodeSelected,
@@ -912,6 +1167,43 @@ export default {
   height: 100vh;
   overflow: hidden;
   background-color: #f5f5f5; /* 改为与图表相同的背景色 */
+}
+
+/* 导出状态指示器样式 */
+.export-status {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1000;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 15px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.export-status-content {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.export-status-message {
+  margin-bottom: 10px;
+  font-size: 16px;
+  text-align: center;
+}
+
+.export-status-progress {
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.export-status-bar {
+  height: 100%;
+  background-color: #42b983;
+  transition: width 0.3s ease;
 }
 
 /* 视频部分 */
