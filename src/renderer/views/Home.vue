@@ -61,6 +61,7 @@
     <!-- 下部分：流程节点图 -->
     <div
       class="graph-section"
+      :class="{ 'with-export-status': exportStatus.isExporting }"
       :style="{
         top: topHeight + 'px',
         height: graphHeight + 'px',
@@ -860,8 +861,42 @@ export default {
       // 可以在这里添加处理导入完成后的逻辑
     };
 
+    // 监听topHeight变化，更新CSS变量
+    watch(topHeight, (newValue) => {
+      // 更新CSS变量
+      document.documentElement.style.setProperty(
+        "--top-height",
+        `${newValue}px`
+      );
+    });
+
+    // 监听exportStatus的变化，确保在状态变化时重新调整布局
+    watch(
+      () => exportStatus.value.isExporting,
+      (newValue, oldValue) => {
+        console.log(`导出状态变化: ${oldValue} -> ${newValue}`);
+        if (oldValue && !newValue) {
+          // 从导出中状态变为非导出状态时，延迟调整布局
+          setTimeout(() => {
+            handleWindowResize();
+          }, 200);
+        } else if (!oldValue && newValue) {
+          // 从非导出状态变为导出状态时，立即调整布局
+          nextTick(() => {
+            handleWindowResize();
+          });
+        }
+      }
+    );
+
     // 组件挂载时初始化
     onMounted(() => {
+      // 设置初始CSS变量
+      document.documentElement.style.setProperty(
+        "--top-height",
+        `${topHeight.value}px`
+      );
+
       // 确保视频不会自动播放
       if (videoPlayer.value) {
         videoPlayer.value.autoplay = false;
@@ -973,6 +1008,9 @@ export default {
               progress: 100,
             };
 
+            // 保存当前的布局状态
+            const lastTopHeight = topHeight.value;
+
             // 短暂显示成功消息后清除
             setTimeout(() => {
               exportStatus.value = {
@@ -980,9 +1018,20 @@ export default {
                 message: "",
                 progress: 0,
               };
+
+              // 清除导出状态后，强制调整布局
+              setTimeout(() => {
+                handleWindowResize();
+              }, 100);
             }, 3000);
 
+            // 显示成功提示
             alert(`打包成功！\n输出路径: ${result.outputPath}`);
+
+            // alert关闭后，再次强制调整布局
+            setTimeout(() => {
+              handleWindowResize();
+            }, 100);
           } else {
             throw new Error(result.error || "导出过程中发生未知错误");
           }
@@ -1002,9 +1051,20 @@ export default {
               message: "",
               progress: 0,
             };
+
+            // 清除导出状态后，强制调整布局
+            setTimeout(() => {
+              handleWindowResize();
+            }, 100);
           }, 3000);
 
+          // 显示错误提示
           alert(`导出失败: ${error.message}`);
+
+          // alert关闭后，再次强制调整布局
+          setTimeout(() => {
+            handleWindowResize();
+          }, 100);
         }
       });
 
@@ -1029,6 +1089,9 @@ export default {
                   data.progress || exportStatus.value.progress
                 }%`;
               }
+
+              // 在进度更新时调整布局，确保图表区域正确显示
+              handleWindowResize();
             }, 0);
           });
         }
@@ -1079,21 +1142,42 @@ export default {
       const windowHeight =
         document.documentElement.clientHeight || window.innerHeight;
 
+      // 获取导出状态指示器的高度（如果可见）
+      let exportStatusHeight = 0;
+      if (exportStatus.value.isExporting) {
+        const exportStatusElement = document.querySelector(".export-status");
+        if (exportStatusElement) {
+          exportStatusHeight = exportStatusElement.offsetHeight || 46; // 默认46px
+        } else {
+          exportStatusHeight = 46; // 估算高度，padding-top + padding-bottom + 内容高度
+        }
+        console.log("导出状态指示器高度:", exportStatusHeight);
+      }
+
       // 更新图表宽度
       graphWidth.value = windowWidth;
 
       // 确保顶部高度不超过窗口高度，且保留分隔条高度
-      if (topHeight.value > windowHeight - 5) {
-        topHeight.value = windowHeight - 5;
+      if (topHeight.value > windowHeight - 5 - exportStatusHeight) {
+        topHeight.value = windowHeight - 5 - exportStatusHeight;
       }
 
       // 强制计算图表高度 - 当前窗口高度减去顶部高度
       const calculatedGraphHeight = windowHeight - topHeight.value;
 
-      // 手动设置graph-section的高度
+      // 手动设置graph-section的高度和位置
       const graphSection = document.querySelector(".graph-section");
       if (graphSection) {
         graphSection.style.height = `${calculatedGraphHeight}px`;
+
+        // 保留视频区和分隔条的垂直位置，即使导出状态显示也不影响
+        // 视频区和分隔条已经有top: 0px和top: topHeight设置
+      }
+
+      // 调整分隔条的位置，确保它保持在视频区域的底部
+      const resizer = document.querySelector(".resizer");
+      if (resizer) {
+        resizer.style.top = `${topHeight.value}px`;
       }
 
       // 确保flowGraph能够获取到正确的容器大小
@@ -1123,6 +1207,7 @@ export default {
         windowHeight,
         topHeight: topHeight.value,
         graphHeight: calculatedGraphHeight,
+        exportStatusHeight,
         isMaximized:
           window.outerWidth >= window.screen.availWidth &&
           window.outerHeight >= window.screen.availHeight,
@@ -1159,6 +1244,14 @@ export default {
   },
 };
 </script>
+
+<style>
+/* 全局CSS变量，确保在scoped外部定义 */
+:root {
+  --top-height: 300px;
+  --export-indicator-height: 46px;
+}
+</style>
 
 <style scoped>
 .resizable-layout {
@@ -1359,6 +1452,17 @@ export default {
   bottom: 0; /* 确保延伸到底部 */
   box-sizing: border-box; /* 确保边框不会增加元素尺寸 */
   min-height: 0; /* 允许最小高度为0 */
+  transition: height 0.1s ease-out; /* 平滑过渡 */
+}
+
+/* 当有导出状态时确保图表区域保持原有尺寸和位置 */
+.graph-section.with-export-status {
+  /* 确保图表区域的位置保持不变 */
+  height: calc(100vh - var(--top-height)) !important;
+  /* 防止将来的调整影响尺寸 */
+  min-height: 200px !important;
+  /* 确保图表容器不会消失 */
+  display: block !important;
 }
 
 .graph {
