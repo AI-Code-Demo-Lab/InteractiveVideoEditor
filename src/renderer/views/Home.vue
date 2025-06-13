@@ -397,8 +397,7 @@ export default {
 
       // 清空当前的互动选项
       interactiveOptions.value = [];
-      // 清空视频创建时间
-      currentVideoCreationTime.value = "";
+      // 注意：不清空视频创建时间，让它保持显示直到播放新视频
 
       // 如果当前有播放节点，清除其播放状态
       if (currentPlayingNodeId.value && flowGraph.value) {
