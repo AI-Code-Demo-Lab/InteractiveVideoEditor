@@ -30,6 +30,14 @@
           您的浏览器不支持 HTML5 视频播放。
         </video>
 
+        <!-- 视频创建时间显示 -->
+        <div
+          v-if="currentVideoCreationTime && currentVideoUrl"
+          class="video-creation-time"
+        >
+          {{ currentVideoCreationTime }}
+        </div>
+
         <!-- 互动选项覆盖层 - 放在视频内部 -->
         <div
           v-if="interactiveOptions.length > 0"
@@ -133,6 +141,9 @@ export default {
       fileName: null,
       hasChanges: false,
     });
+
+    // 当前播放视频的创建时间
+    const currentVideoCreationTime = ref("");
 
     // 监听全屏状态变化
     const setupFullscreenListeners = () => {
@@ -386,6 +397,8 @@ export default {
 
       // 清空当前的互动选项
       interactiveOptions.value = [];
+      // 清空视频创建时间
+      currentVideoCreationTime.value = "";
 
       // 如果当前有播放节点，清除其播放状态
       if (currentPlayingNodeId.value && flowGraph.value) {
@@ -510,6 +523,34 @@ export default {
               videoNodeInfo.filePath
             );
             if (exists) {
+              // 获取文件创建时间
+              try {
+                const fileStats = await window.electron.invoke(
+                  "fsStatSync",
+                  videoNodeInfo.filePath
+                );
+
+                if (fileStats && !fileStats.error && fileStats.created) {
+                  const creationDate = new Date(fileStats.created);
+                  currentVideoCreationTime.value = creationDate.toLocaleString(
+                    "zh-CN",
+                    {
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    }
+                  );
+                } else {
+                  currentVideoCreationTime.value = "";
+                }
+              } catch (statsError) {
+                console.warn("无法获取文件创建时间:", statsError);
+                currentVideoCreationTime.value = "";
+              }
+
               const fileBuffer = await window.electron.invoke(
                 "fsReadFileSync",
                 videoNodeInfo.filePath
@@ -541,16 +582,19 @@ export default {
               }
             } else {
               console.error("文件不存在:", videoNodeInfo.filePath);
+              currentVideoCreationTime.value = "";
               return null;
             }
           } catch (error) {
             console.error("读取文件或创建 URL 失败:", error);
+            currentVideoCreationTime.value = "";
             return null;
           }
         } else {
           console.warn(
             "节点没有有效的文件路径或Electron API不可用，尝试使用现有URL"
           );
+          currentVideoCreationTime.value = "";
           // 如果没有filePath，尝试使用现有的URL（可能来自拖放或旧逻辑）
           if (videoNodeInfo.url && videoNodeInfo.url.startsWith("blob:")) {
             console.log("使用节点现有的Blob URL:", videoNodeInfo.url);
@@ -801,8 +845,10 @@ export default {
       currentDownstreamNodes.value = [];
       // 5. 清除互动选项
       interactiveOptions.value = [];
+      // 6. 清除视频创建时间
+      currentVideoCreationTime.value = "";
 
-      // 6. 清除旧的视频节点信息并释放Blob URL
+      // 7. 清除旧的视频节点信息并释放Blob URL
       if (videoNodes.value) {
         Object.values(videoNodes.value).forEach((node) => {
           if (node.url && node.url.startsWith("blob:")) {
@@ -817,7 +863,7 @@ export default {
         videoNodes.value = {}; // 清空集合
       }
 
-      // 7. 清除 FlowGraph 中的播放状态
+      // 8. 清除 FlowGraph 中的播放状态
       if (flowGraph.value) {
         flowGraph.value.setPlayingNodeState(null, false);
       }
@@ -1228,6 +1274,7 @@ export default {
       interactiveOptions,
       isFullScreen,
       exportStatus,
+      currentVideoCreationTime,
       startResize,
       handleTimeUpdate,
       handleNodeSelected,
@@ -1370,6 +1417,58 @@ export default {
   padding: 0 20px;
   z-index: 10;
   pointer-events: auto;
+}
+
+/* 视频创建时间显示样式 */
+.video-creation-time {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  color: #ff4444;
+  padding: 8px 12px;
+  font-size: 18px;
+  font-family: "Courier New", Consolas, monospace;
+  font-weight: bold;
+  opacity: 0.8;
+  z-index: 8;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 0.3s ease;
+}
+
+/* 鼠标悬停时稍微增加透明度 */
+.video-container:hover .video-creation-time {
+  opacity: 0.9;
+}
+
+/* 在全屏模式下确保创建时间可见并适当缩放 */
+.video-section:fullscreen .video-creation-time,
+.video-section:-webkit-full-screen .video-creation-time,
+.video-section:-moz-full-screen .video-creation-time,
+.video-section:-ms-fullscreen .video-creation-time {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  font-size: 18px;
+  padding: 10px 15px;
+  z-index: 9999;
+}
+
+/* 响应式字体大小 - 根据视频容器大小调整 */
+@media (max-width: 768px) {
+  .video-creation-time {
+    font-size: 18px;
+    padding: 6px 10px;
+    top: 10px;
+    right: 10px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .video-creation-time {
+    font-size: 24px;
+    padding: 9px 13px;
+  }
 }
 
 /* 确保在全屏模式下选项仍然可见 */

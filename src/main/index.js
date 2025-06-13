@@ -328,6 +328,7 @@ function setupIpcHandlers() {
 
       // 复制视频文件
       const videoMapping = {};
+      const videoCreationTimes = {}; // 存储视频创建时间
       const totalFiles = videoFiles.length;
 
       for (let i = 0; i < videoFiles.length; i++) {
@@ -345,6 +346,26 @@ function setupIpcHandlers() {
         await new Promise((resolve) => setTimeout(resolve, 50));
 
         if (video.filePath && fs.existsSync(video.filePath)) {
+          // 获取文件创建时间
+          try {
+            const stats = fs.statSync(video.filePath);
+            const creationDate = new Date(stats.birthtime);
+            videoCreationTimes[video.nodeId] = creationDate.toLocaleString(
+              "zh-CN",
+              {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              }
+            );
+          } catch (statsError) {
+            console.warn(`无法获取文件创建时间: ${video.filePath}`, statsError);
+            videoCreationTimes[video.nodeId] = "";
+          }
+
           // 生成一个唯一的文件名
           const uniqueFileName = `video_${Date.now()}_${Math.floor(
             Math.random() * 1000
@@ -400,7 +421,11 @@ function setupIpcHandlers() {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       // 创建HTML文件，包含播放器和交互逻辑
-      const htmlContent = generatePlayerHTML(graphData, videoMapping);
+      const htmlContent = generatePlayerHTML(
+        graphData,
+        videoMapping,
+        videoCreationTimes
+      );
       fs.writeFileSync(
         path.join(exportDir, "index.html"),
         htmlContent,
@@ -445,7 +470,11 @@ function setupIpcHandlers() {
   });
 
   // 辅助函数：生成播放器HTML
-  function generatePlayerHTML(graphData, videoMapping) {
+  function generatePlayerHTML(
+    graphData,
+    videoMapping,
+    videoCreationTimes = {}
+  ) {
     // 创建基础HTML模板
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -514,11 +543,52 @@ function setupIpcHandlers() {
             transform: translateY(-3px);
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
         }
+        
+        /* 视频创建时间显示样式 */
+        .video-creation-time {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            color: #ff4444;
+            padding: 8px 12px;
+            font-size: 18px;
+            font-family: "Courier New", Consolas, monospace;
+            font-weight: bold;
+            opacity: 0.8;
+            z-index: 8;
+            pointer-events: none;
+            white-space: nowrap;
+            transition: opacity 0.3s ease;
+            display: none;
+        }
+        
+        /* 鼠标悬停时稍微增加透明度 */
+        .video-container:hover .video-creation-time {
+            opacity: 0.9;
+        }
+        
+        /* 响应式字体大小 */
+        @media (max-width: 768px) {
+            .video-creation-time {
+                font-size: 18px;
+                padding: 6px 10px;
+                top: 10px;
+                right: 10px;
+            }
+        }
+        
+        @media (min-width: 1200px) {
+            .video-creation-time {
+                font-size: 24px;
+                padding: 9px 13px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="video-container">
         <video id="videoPlayer" controls controlsList="nofullscreen"></video>
+        <div id="videoCreationTime" class="video-creation-time"></div>
         <div id="options" class="interactive-options"></div>
     </div>
 
@@ -529,6 +599,9 @@ function setupIpcHandlers() {
     // 视频映射
     const videoMapping = ${JSON.stringify(videoMapping, null, 2)};
     
+    // 视频创建时间映射
+    const videoCreationTimes = ${JSON.stringify(videoCreationTimes, null, 2)};
+    
     // 节点数据映射
     const nodeMap = {};
     
@@ -538,6 +611,7 @@ function setupIpcHandlers() {
     
     // DOM 元素
     const videoPlayer = document.getElementById('videoPlayer');
+    const videoCreationTimeElement = document.getElementById('videoCreationTime');
     const optionsContainer = document.getElementById('options');
     
     // 初始化节点映射
@@ -623,6 +697,15 @@ function setupIpcHandlers() {
         videoPlayer.play().catch(err => {
             console.error('视频播放失败:', err);
         });
+        
+        // 显示视频创建时间
+        const creationTime = videoCreationTimes[nodeId];
+        if (creationTime && videoCreationTimeElement) {
+            videoCreationTimeElement.textContent = creationTime;
+            videoCreationTimeElement.style.display = 'block';
+        } else {
+            videoCreationTimeElement.style.display = 'none';
+        }
         
         // 清除选项
         optionsContainer.innerHTML = '';
